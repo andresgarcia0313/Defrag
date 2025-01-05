@@ -1,6 +1,7 @@
 # pylint: disable=missing-module-docstring
 # pylint: disable=missing-class-docstring
 # pylint: disable=missing-function-docstring
+# pylint: disable=no-name-in-module
 import sys
 import subprocess
 from PySide6.QtWidgets import (
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
 )
 from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QIcon
 
 # Capa de Entidades (Entities)
 
@@ -93,6 +95,22 @@ class DefragGUI(QWidget):
         self.stop_button = QPushButton("Detener")
         self.select_file_button = QPushButton("Seleccionar Archivo")
 
+        # Agregar iconos a los botones
+        self.start_button.setIcon(QIcon("icons/start.png"))
+        self.stop_button.setIcon(QIcon("icons/stop.png"))
+        self.select_file_button.setIcon(QIcon("icons/select_file.png"))
+
+        # Estilo de los botones
+        self.start_button.setStyleSheet(
+            "background-color: #4CAF50; color: white; padding: 10px;"
+        )
+        self.stop_button.setStyleSheet(
+            "background-color: #f44336; color: white; padding: 10px;"
+        )
+        self.select_file_button.setStyleSheet(
+            "background-color: #008CBA; color: white; padding: 10px;"
+        )
+
         button_layout.addWidget(self.start_button)
         button_layout.addWidget(self.stop_button)
         button_layout.addWidget(self.select_file_button)
@@ -103,12 +121,26 @@ class DefragGUI(QWidget):
         self.partition_table.setColumnCount(4)
         self.partition_table.setHorizontalHeaderLabels(
             ["Unidad", "Tipo", "Tamaño", "Espacio libre"])
-        self.partition_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.partition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch)
 
         self.status_label = QLabel("Estado: Inactivo")
         self.progress_bar = QProgressBar()
         self.log_list = QListWidget()
         self.log_list.setSelectionMode(QListWidget.ExtendedSelection)
+
+        # Estilo de la barra de progreso
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid grey;
+                border-radius: 5px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                width: 20px;
+            }
+        """)
 
         layout.addWidget(self.partition_table)
         layout.addWidget(self.status_label)
@@ -118,15 +150,24 @@ class DefragGUI(QWidget):
         self.select_file_button.clicked.connect(self.select_file)
         self.start_button.clicked.connect(self.start_defrag)
         self.stop_button.clicked.connect(self.stop_defrag)
-        self.partition_table.cellClicked.connect(self.select_partition)
+        self.partition_table.cellClicked.connect(
+            self.on_partition_table_cell_clicked
+        )
 
         self.setLayout(layout)
         self.load_partitions()
 
+    def on_partition_table_cell_clicked(self, row, _):
+        self.select_partition(row)
+
     def load_partitions(self):
         try:
             result = subprocess.run(
-                ['lsblk', '-o', 'NAME,TYPE,SIZE,FSAVAIL'], capture_output=True, text=True)
+                    ['lsblk', '-o', 'NAME,TYPE,SIZE,FSAVAIL'],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
             lines = result.stdout.splitlines()
             self.partition_table.setRowCount(len(lines) - 1)
             for row, line in enumerate(lines[1:]):
@@ -134,11 +175,20 @@ class DefragGUI(QWidget):
                 for col, part in enumerate(parts):
                     self.partition_table.setItem(
                         row, col, QTableWidgetItem(part))
-        except Exception as e:
+        except subprocess.CalledProcessError as e:
             QMessageBox.critical(
-                self, "Error", f"No se pudieron cargar las particiones: {str(e)}")
+                self, "Error", f"Error en el proceso de llamada: {str(e)}")
+        except FileNotFoundError as e:
+            QMessageBox.critical(
+                self, "Error", f"Archivo no encontrado: {str(e)}")
+        except OSError as e:
+            QMessageBox.critical(
+                self, "Error", f"Error del sistema operativo: {str(e)}")
+        except ValueError as e:
+            QMessageBox.critical(
+                self, "Error", f"Error de valor: {str(e)}")
 
-    def select_partition(self, row, column):
+    def select_partition(self, row):
         name = self.partition_table.item(row, 0).text()
         type_ = self.partition_table.item(row, 1).text()
         size = self.partition_table.item(row, 2).text()
@@ -160,7 +210,8 @@ class DefragGUI(QWidget):
             QLineEdit.Password)
         if not ok or not sudo_password:
             QMessageBox.warning(
-                self, "Advertencia", "Debe introducir la contraseña sudo para continuar.")
+                self, "Advertencia",
+                "Debe introducir la contraseña sudo para continuar.")
             return
 
         task = DefragTask(self.partition, sudo_password)
