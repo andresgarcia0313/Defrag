@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QTableWidget,
     QTableWidgetItem,
+    QHeaderView,
+    QHBoxLayout,
 )
 from PySide6.QtCore import QThread, Signal
 
@@ -126,7 +128,7 @@ class DefragGUI(QWidget):
     def __init__(self, defrag_use_case: DefragUseCase):
         super().__init__()
         self.setWindowTitle("Defrag")
-        self.setGeometry(300, 200, 600, 400)  # Ajustar tamaño de la ventana
+        self.setGeometry(300, 200, 780, 560)  # Ajustar tamaño de la ventana
 
         self.defrag_use_case = defrag_use_case
         self.defrag_worker = None
@@ -136,26 +138,31 @@ class DefragGUI(QWidget):
     def init_ui(self):
         layout = QVBoxLayout()
 
+        button_layout = QHBoxLayout()
+        self.start_button = QPushButton("Iniciar")
+        self.stop_button = QPushButton("Detener")
+        self.select_file_button = QPushButton("Seleccionar Archivo")
+
+        button_layout.addWidget(self.start_button)
+        button_layout.addWidget(self.stop_button)
+        button_layout.addWidget(self.select_file_button)
+
+        layout.addLayout(button_layout)
+
         self.partition_table = QTableWidget()
         self.partition_table.setColumnCount(4)
         self.partition_table.setHorizontalHeaderLabels(["Unidad", "Tipo de disco duro", "Tamaño", "Espacio libre"])
+        self.partition_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         self.status_label = QLabel("Estado: Inactivo")
         self.progress_bar = QProgressBar()
         self.log_list = QListWidget()
         self.log_list.setSelectionMode(QListWidget.ExtendedSelection)
 
-        self.select_file_button = QPushButton("Seleccionar Archivo")
-        self.start_button = QPushButton("Iniciar")
-        self.stop_button = QPushButton("Detener")
-
         layout.addWidget(self.partition_table)
         layout.addWidget(self.status_label)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.log_list)
-        layout.addWidget(self.select_file_button)
-        layout.addWidget(self.start_button)
-        layout.addWidget(self.stop_button)
 
         self.select_file_button.clicked.connect(self.select_file)
         self.start_button.clicked.connect(self.start_defrag)
