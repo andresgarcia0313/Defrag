@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QInputDialog,
     QLineEdit,
-    QComboBox,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -23,116 +22,67 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QThread, Signal
 
-# Capa de Entidades
+# Capa de Entidades (Entities)
 
 
-class DefragStatus:
-    def __init__(self, is_running=False, progress=0, message=""):
-        self.is_running = is_running
+class DiskPartition:
+    def __init__(self, name, type_, size, free_space):
+        self.name = name
+        self.type = type_
+        self.size = size
+        self.free_space = free_space
+
+
+class DefragTask:
+    def __init__(self, partition: DiskPartition, sudo_password: str):
+        self.partition = partition
+        self.sudo_password = sudo_password
+        self.progress = 0
+        self.is_running = False
+        self.message = ""
+
+    def start(self):
+        self.is_running = True
+        self.progress = 0
+        return f"Desfragmentación iniciada en {self.partition.name}"
+
+    def stop(self):
+        self.is_running = False
+        self.progress = 100
+        return f"Desfragmentación detenida en {self.partition.name}"
+
+    def update_progress(self, progress, message=""):
         self.progress = progress
         self.message = message
 
-
-class DefragEntity:
-    def __init__(self):
-        self.status = DefragStatus()
-
-    def start_defrag(self):
-        self.status.is_running = True
-        self.status.progress = 0
-        return "Desfragmentación iniciada"
-
-    def stop_defrag(self):
-        self.status.is_running = False
-        self.status.progress = 100
-        return "Desfragmentación detenida"
-
-    def update_progress(self, progress, message=""):
-        self.status.progress = progress
-        self.status.message = message
-
-# Capa de Casos de Uso
+# Capa de Casos de Uso (Use Cases)
 
 
 class DefragUseCase:
-    def __init__(self, defrag_entity: DefragEntity):
-        self.defrag_entity = defrag_entity
+    def __init__(self, task: DefragTask):
+        self.task = task
 
-    def execute_start(self):
-        return self.defrag_entity.start_defrag()
+    def start_defrag(self):
+        return self.task.start()
 
-    def execute_stop(self):
-        return self.defrag_entity.stop_defrag()
+    def stop_defrag(self):
+        return self.task.stop()
 
-    def execute_update_progress(self, progress, message):
-        self.defrag_entity.update_progress(progress, message)
+    def update_progress(self, progress, message):
+        self.task.update_progress(progress, message)
 
-
-class DefragWorker(QThread):
-    progress_signal = Signal(int, str)
-
-    def __init__(self, filepath, sudo_password):
-        super().__init__()
-        self.filepath = filepath
-        self.sudo_password = sudo_password
-        self.running = True
-
-    def run(self):
-        try:
-            process = subprocess.Popen(
-                ["sudo", "-S", "e4defrag", "-c", self.filepath],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            process.stdin.write(self.sudo_password + "\n")
-            process.stdin.flush()
-            while self.running and process.poll() is None:
-                output = process.stdout.readline().strip()
-                if output:
-                    self._parse_output(output)
-            if process.poll() is not None and process.returncode != 0:
-                error = process.stderr.read()
-                self.progress_signal.emit(100, f"Error: {error}")
-        except subprocess.CalledProcessError as e:
-            self.progress_signal.emit(100, f"Error en el proceso: {str(e)}")
-        except FileNotFoundError as e:
-            self.progress_signal.emit(100, f"Archivo no encontrado: {str(e)}")
-        except OSError as e:
-            self.progress_signal.emit(
-                100, f"Error del sistema operativo: {str(e)}"
-            )
-        except ValueError as e:
-            self.progress_signal.emit(100, f"Error de valor: {str(e)}")
-
-    def stop(self):
-        self.running = False
-
-    def _parse_output(self, output):
-        if "extents" in output:  # Busca información de progreso relevante
-            self.progress_signal.emit(50, output)
-        elif "now" in output and "%" in output:
-            try:
-                progress = int(output.split()[-1].replace("%", ""))
-                self.progress_signal.emit(progress, output)
-            except ValueError:
-                self.progress_signal.emit(0, output)
-        else:
-            self.progress_signal.emit(0, output)
-
-# Capa de Interfaces
+# Capa de Interfaces (Interface Adapters)
 
 
 class DefragGUI(QWidget):
     def __init__(self, defrag_use_case: DefragUseCase):
         super().__init__()
         self.setWindowTitle("Defrag")
-        self.setGeometry(300, 200, 780, 560)  # Ajustar tamaño de la ventana
+        self.setGeometry(300, 200, 780, 560)
 
         self.defrag_use_case = defrag_use_case
         self.defrag_worker = None
-        self.filepath = ""
+        self.partition = None
         self.init_ui()
 
     def init_ui(self):
@@ -151,7 +101,8 @@ class DefragGUI(QWidget):
 
         self.partition_table = QTableWidget()
         self.partition_table.setColumnCount(4)
-        self.partition_table.setHorizontalHeaderLabels(["Unidad", "Tipo de disco duro", "Tamaño", "Espacio libre"])
+        self.partition_table.setHorizontalHeaderLabels(
+            ["Unidad", "Tipo", "Tamaño", "Espacio libre"])
         self.partition_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         self.status_label = QLabel("Estado: Inactivo")
@@ -170,28 +121,38 @@ class DefragGUI(QWidget):
         self.partition_table.cellClicked.connect(self.select_partition)
 
         self.setLayout(layout)
-        self.filepath = ""
         self.load_partitions()
 
     def load_partitions(self):
         try:
-            result = subprocess.run(['lsblk', '-o', 'NAME,TYPE,SIZE,FSAVAIL'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['lsblk', '-o', 'NAME,TYPE,SIZE,FSAVAIL'], capture_output=True, text=True)
             lines = result.stdout.splitlines()
             self.partition_table.setRowCount(len(lines) - 1)
             for row, line in enumerate(lines[1:]):
                 parts = line.split()
                 for col, part in enumerate(parts):
-                    self.partition_table.setItem(row, col, QTableWidgetItem(part))
+                    self.partition_table.setItem(
+                        row, col, QTableWidgetItem(part))
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudieron cargar las particiones: {str(e)}")
+            QMessageBox.critical(
+                self, "Error", f"No se pudieron cargar las particiones: {str(e)}")
 
     def select_partition(self, row, column):
-        self.filepath = self.partition_table.item(row, 0).text()
-        self.status_label.setText(f"Partición seleccionada: {self.filepath}")
+        name = self.partition_table.item(row, 0).text()
+        type_ = self.partition_table.item(row, 1).text()
+        size = self.partition_table.item(row, 2).text()
+        free_space = self.partition_table.item(row, 3).text()
+
+        self.partition = DiskPartition(name, type_, size, free_space)
+        self.status_label.setText(
+            f"Partición seleccionada: {self.partition.name}"
+        )
 
     def start_defrag(self):
-        if not self.filepath:
-            QMessageBox.warning(self, "Advertencia", "Seleccione una partición o archivo antes de iniciar.")
+        if not self.partition:
+            QMessageBox.warning(self, "Advertencia",
+                                "Seleccione una partición antes de iniciar.")
             return
 
         sudo_password, ok = QInputDialog.getText(
@@ -199,17 +160,18 @@ class DefragGUI(QWidget):
             QLineEdit.Password)
         if not ok or not sudo_password:
             QMessageBox.warning(
-                self, "Advertencia",
-                "Debe introducir la contraseña sudo para continuar."
-            )
+                self, "Advertencia", "Debe introducir la contraseña sudo para continuar.")
             return
 
-        response = self.defrag_use_case.execute_start()
+        task = DefragTask(self.partition, sudo_password)
+        defrag_use_case = DefragUseCase(task)
+
+        response = defrag_use_case.start_defrag()
         self.status_label.setText(f"Estado: {response}")
         self.progress_bar.setValue(0)
         self.log_list.clear()
 
-        self.defrag_worker = DefragWorker(self.filepath, sudo_password)
+        self.defrag_worker = DefragWorker(task)
         self.defrag_worker.progress_signal.connect(self.update_progress)
         self.defrag_worker.start()
 
@@ -217,7 +179,7 @@ class DefragGUI(QWidget):
         if self.defrag_worker:
             self.defrag_worker.stop()
             self.defrag_worker.wait()
-            response = self.defrag_use_case.execute_stop()
+            response = self.defrag_use_case.stop_defrag()
             self.status_label.setText(f"Estado: {response}")
             self.progress_bar.setValue(0)
             self.log_list.addItem("Proceso detenido por el usuario.")
@@ -230,20 +192,69 @@ class DefragGUI(QWidget):
         filepath, _ = QFileDialog.getOpenFileName(
             self, "Seleccionar archivo", "", "Todos los archivos (*)")
         if filepath:
-            self.filepath = filepath
+            self.partition = DiskPartition(
+                filepath, "Desconocido", "N/A", "N/A")
             self.status_label.setText(f"Archivo seleccionado: {filepath}")
-            self.partition_combo.setCurrentIndex(0)  # Reset partition selection
 
-# Capa de Infraestructura
+# Capa de Infraestructura (Frameworks and Drivers)
+
+
+class DefragWorker(QThread):
+    progress_signal = Signal(int, str)
+
+    def __init__(self, task: DefragTask):
+        super().__init__()
+        self.task = task
+        self.running = True
+
+    def run(self):
+        try:
+            process = subprocess.Popen(
+                ["sudo", "-S", "e4defrag", "-c", self.task.partition.name],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            process.stdin.write(self.task.sudo_password + "\n")
+            process.stdin.flush()
+            while self.running and process.poll() is None:
+                output = process.stdout.readline().strip()
+                if output:
+                    self._parse_output(output)
+            if process.poll() is not None and process.returncode != 0:
+                error = process.stderr.read()
+                self.progress_signal.emit(100, f"Error: {error}")
+        except subprocess.CalledProcessError as e:
+            self.progress_signal.emit(100, f"Error en el proceso: {str(e)}")
+        except FileNotFoundError as e:
+            self.progress_signal.emit(100, f"Archivo no encontrado: {str(e)}")
+        except OSError as e:
+            self.progress_signal.emit(
+                100, f"Error del sistema operativo: {str(e)}")
+        except ValueError as e:
+            self.progress_signal.emit(100, f"Error de valor: {str(e)}")
+
+    def stop(self):
+        self.running = False
+
+    def _parse_output(self, output):
+        if "extents" in output:
+            self.progress_signal.emit(50, output)
+        elif "now" in output and "%" in output:
+            try:
+                progress = int(output.split()[-1].replace("%", ""))
+                self.progress_signal.emit(progress, output)
+            except ValueError:
+                self.progress_signal.emit(0, output)
+        else:
+            self.progress_signal.emit(0, output)
 
 
 def main():
     app = QApplication(sys.argv)
 
-    defrag_entity = DefragEntity()
-    defrag_use_case = DefragUseCase(defrag_entity)
-
-    window = DefragGUI(defrag_use_case)
+    window = DefragGUI(None)  # Asignar DefragUseCase cuando esté disponible
     window.show()
 
     sys.exit(app.exec())
